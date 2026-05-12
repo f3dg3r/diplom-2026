@@ -28,7 +28,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // API-маршруты
 app.use('/api/auth', authRoutes);
 // app.use('/api/movies', movieRoutes);   // отключено, фильмы загружаются напрямую из браузера через TMDB API
-app.use('/api/weather', weatherRoutes);
+// app.use('/api/weather', weatherRoutes);
 app.use('/api/favorites', favoriteRoutes);
 
 // Центральный обработчик ошибок

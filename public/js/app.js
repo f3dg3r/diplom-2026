@@ -1,6 +1,6 @@
 (function() {
   // ---------- НАСТРОЙКИ ----------
-  const API_BASE = '/api';               // сервер для авторизации/избранного/погоды
+  const API_BASE = '/api';               // сервер для авторизации/избранного
   const TMDB_KEY = '611c7d469272e7193dcd150a0b4a8f67';
   const TMDB_BASE = 'https://api.themoviedb.org/3';
   const IMG_BASE = 'https://image.tmdb.org/t/p/w500';
@@ -9,7 +9,7 @@
     action: '28', horror: '27', scifi: '878'
   };
 
-  let currentUser = JSON.parse(localStorage.getItem('moodmovie_user')) || null; // { username, token }
+  let currentUser = JSON.parse(localStorage.getItem('moodmovie_user')) || null;
   let favorites = [];
   let currentPage = { home: 1, mood: 1 };
   let totalPages = { home: 1, mood: 1 };
@@ -136,24 +136,92 @@
     }
   }
 
-  // ---------- ПОГОДА (сервер) ----------
+  // ---------- ПОГОДНЫЙ СЛАЙДЕР (расширенный) ----------
   async function loadWeatherSlider() {
     const slider = document.getElementById('weatherSlider');
+    if (!slider) return;
+
     slider.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+
+    // 1. Геолокация или Москва по умолчанию
+    let latitude, longitude;
     try {
-      const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
-      const { latitude, longitude } = pos.coords;
-      const res = await fetch(`${API_BASE}/weather/recommendations?lat=${latitude}&lon=${longitude}`);
-      if (!res.ok) throw new Error('Weather fail');
-      const movies = await res.json();
-      if (movies.length) {
-        slider.innerHTML = '';
-        movies.forEach(movie => slider.appendChild(createMovieCard(movie, true)));
-      } else {
-        slider.innerHTML = '<div class="empty-state">Нет данных о погоде</div>';
+      const pos = await new Promise((res, rej) =>
+        navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 })
+      );
+      latitude = pos.coords.latitude;
+      longitude = pos.coords.longitude;
+    } catch (geoErr) {
+      // Пользователь не дал гео – используем Москву
+      console.warn('Геолокация недоступна, показываем погоду для Москвы');
+      latitude = 55.7558;
+      longitude = 37.6173;
+    }
+
+    // 2. Получаем погоду (Open-Meteo)
+    let weatherCode;
+    try {
+      const weatherRes = await fetch(
+        `https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current_weather=true`
+      );
+      const weatherData = await weatherRes.json();
+      weatherCode = weatherData.current_weather.weathercode;
+    } catch (e) {
+      console.error('Ошибка Open-Meteo', e);
+      slider.innerHTML = '<div class="empty-state">Сервис погоды недоступен</div>';
+      return;
+    }
+
+    // 3. Точный маппинг WMO Weather Codes → жанры TMDB
+    function mapWeatherToGenres(code) {
+      if ([0, 1].includes(code))       return { genres: '35,10751',        label: 'Ясно ☀️' };
+      if ([2, 3].includes(code))       return { genres: '18,10749,9648',  label: 'Облачно ⛅' };
+      if ([45, 48].includes(code))     return { genres: '9648,53,27',     label: 'Туман 🌫️' };
+      if ([51, 53, 55].includes(code)) return { genres: '10749,18',       label: 'Морось 🌦️' };
+      if ([56, 57, 61, 63, 65].includes(code)) return { genres: '53,9648',    label: 'Дождь 🌧️' };
+      if ([66, 67, 80, 81, 82].includes(code)) return { genres: '27,53',      label: 'Ливень ⛈️' };
+      if ([71, 73, 75, 77, 85, 86].includes(code)) return { genres: '14,10751,12', label: 'Снег ❄️' };
+      if ([95, 96, 99].includes(code)) return { genres: '28,27,53',       label: 'Гроза ⚡' };
+      return { genres: '28,12', label: 'Местами дождь 🌈' };
+    }
+
+    const { genres, label } = mapWeatherToGenres(weatherCode);
+    document.querySelector('.weather-slider-title').innerHTML =
+      `<i class="fas fa-cloud-sun"></i> Рекомендации по погоде (${label})`;
+
+    // 4. Запрос фильмов у TMDB (сортируем по рейтингу, случайная страница для разнообразия)
+    const page = Math.floor(Math.random() * 3) + 1;
+    const tmdbRes = await fetch(
+      `${TMDB_BASE}/discover/movie?api_key=${TMDB_KEY}&language=ru&with_genres=${genres}&sort_by=vote_average.desc&vote_count.gte=100&page=${page}`
+    );
+    if (!tmdbRes.ok) {
+      slider.innerHTML = '<div class="empty-state">Не удалось загрузить фильмы</div>';
+      return;
+    }
+    const data = await tmdbRes.json();
+    let movies = data.results;
+
+    // Добираем, если меньше 15
+    if (movies.length < 15) {
+      const extraRes = await fetch(
+        `${TMDB_BASE}/discover/movie?api_key=${TMDB_KEY}&language=ru&with_genres=${genres.split(',')[0]}&sort_by=popularity.desc&page=1`
+      );
+      if (extraRes.ok) {
+        const extraData = await extraRes.json();
+        const extraMovies = extraData.results.slice(0, 20 - movies.length);
+        const existingIds = new Set(movies.map(m => m.id));
+        movies = movies.concat(extraMovies.filter(m => !existingIds.has(m.id)));
       }
-    } catch (err) {
-      slider.innerHTML = '<div class="empty-state">Не удалось загрузить погодные рекомендации</div>';
+    }
+
+    movies = movies.slice(0, 20); // максимум 20 карточек
+
+    // 5. Рендерим слайдер
+    if (movies.length > 0) {
+      slider.innerHTML = '';
+      movies.forEach(movie => slider.appendChild(createMovieCard(movie, true)));
+    } else {
+      slider.innerHTML = '<div class="empty-state">Нет фильмов, подходящих погоде</div>';
     }
   }
 
@@ -232,7 +300,6 @@
 
   function isFavorite(movieId) { return favorites.includes(movieId); }
 
-  // ---------- TOGGLE ИЗБРАННОГО (сервер) ----------
   async function toggleFavorite(movieId) {
     if (!currentUser) { alert('Войдите, чтобы добавлять в избранное'); return; }
     const isFav = isFavorite(movieId);
