@@ -1,32 +1,32 @@
 (function() {
-  const API_BASE = '/api'; // если сервер раздаёт статику, можно относительный путь
+  // ---------- НАСТРОЙКИ ----------
+  const API_BASE = '/api';               // сервер для авторизации/избранного/погоды
+  const TMDB_KEY = '611c7d469272e7193dcd150a0b4a8f67';
+  const TMDB_BASE = 'https://api.themoviedb.org/3';
   const IMG_BASE = 'https://image.tmdb.org/t/p/w500';
-  const moodGenres = { comedy: '35', drama: '18', romance: '10749', mystery: '9648', action: '28', horror: '27', scifi: '878' };
+  const moodGenres = {
+    comedy: '35', drama: '18', romance: '10749', mystery: '9648',
+    action: '28', horror: '27', scifi: '878'
+  };
 
   let currentUser = JSON.parse(localStorage.getItem('moodmovie_user')) || null; // { username, token }
-  let favorites = []; // список movieId, загружаемый с сервера
+  let favorites = [];
   let currentPage = { home: 1, mood: 1 };
   let totalPages = { home: 1, mood: 1 };
   let state = { homeCategory: 'popular', mood: 'comedy' };
 
-  // Загрузка избранного с сервера при старте или смене пользователя
+  // ---------- ИЗБРАННОЕ (сервер) ----------
   async function loadFavoritesFromServer() {
-    if (!currentUser) {
-      favorites = [];
-      return;
-    }
+    if (!currentUser) { favorites = []; return; }
     try {
       const res = await fetch(`${API_BASE}/favorites`, {
         headers: { 'Authorization': `Bearer ${currentUser.token}` }
       });
       if (res.ok) favorites = await res.json();
       else favorites = [];
-    } catch (e) {
-      favorites = [];
-    }
+    } catch (e) { favorites = []; }
   }
 
-  // После успешной авторизации или выхода обновляем UI и данные
   async function onUserChanged() {
     await loadFavoritesFromServer();
     refreshCurrentView();
@@ -75,7 +75,7 @@
     grid.innerHTML = `<div class="empty-state">❌ ${message}</div>`;
   }
 
-  // Загрузка категорий (popular / now_playing)
+  // ---------- ФИЛЬМЫ (прямые запросы к TMDB) ----------
   async function loadHomeCategory(category, page = 1) {
     const grid = document.getElementById('homeMoviesGrid');
     const loader = document.getElementById('homeLoading');
@@ -83,9 +83,7 @@
     grid.innerHTML = '';
     try {
       const endpoint = category === 'popular' ? 'popular' : 'now_playing';
-      const res = await fetch(`${API_BASE}/movies/${endpoint}?page=${page}`, {
-        headers: currentUser ? { 'Authorization': `Bearer ${currentUser.token}` } : {}
-      });
+      const res = await fetch(`${TMDB_BASE}/movie/${endpoint}?api_key=${TMDB_KEY}&language=ru&page=${page}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (!data.results) throw new Error('Empty response');
@@ -101,16 +99,14 @@
     }
   }
 
-  // Фильмы по настроению
   async function loadMoodMovies(mood, page = 1) {
     const grid = document.getElementById('moodMoviesGrid');
     const loader = document.getElementById('moodLoading');
     loader.style.display = 'block';
     grid.innerHTML = '';
+    const genre = moodGenres[mood] || '35';
     try {
-      const res = await fetch(`${API_BASE}/movies/mood?mood=${mood}&page=${page}`, {
-        headers: currentUser ? { 'Authorization': `Bearer ${currentUser.token}` } : {}
-      });
+      const res = await fetch(`${TMDB_BASE}/discover/movie?api_key=${TMDB_KEY}&language=ru&with_genres=${genre}&sort_by=popularity.desc&page=${page}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       if (!data.results) throw new Error('Empty response');
@@ -126,46 +122,21 @@
     }
   }
 
-  // Загрузка избранного (полные данные через TMDB на сервере можно было бы, но ради простоты фронт запрашивает id, а потом детали)
-  async function loadFavorites() {
-    const grid = document.getElementById('favMoviesGrid');
-    const loader = document.getElementById('favLoading');
-    loader.style.display = 'block';
-    grid.innerHTML = '';
+  async function searchMovies(query) {
+    showView('viewHome');
+    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('homePagination').innerHTML = '';
     try {
-      const idsRes = await fetch(`${API_BASE}/favorites`, {
-        headers: { 'Authorization': `Bearer ${currentUser.token}` }
-      });
-      if (!idsRes.ok) throw new Error('Failed to load favorites');
-      const ids = await idsRes.json();
-      if (!ids.length) {
-        grid.innerHTML = '<div class="empty-state">Избранное пусто</div>';
-        return;
-      }
-      // Загружаем каждый фильм отдельно (можно оптимизировать, но пока так)
-      const movies = [];
-      for (const id of ids) {
-        const movieRes = await fetch(`${API_BASE}/movies/${id}`);
-        if (movieRes.ok) {
-          const data = await movieRes.json();
-          if (data.movie) movies.push(data.movie);
-        }
-        await new Promise(r => setTimeout(r, 200));
-      }
-      if (movies.length) {
-        grid.innerHTML = '';
-        movies.forEach(movie => grid.appendChild(createMovieCard(movie)));
-      } else {
-        grid.innerHTML = '<div class="empty-state">Не удалось загрузить избранное</div>';
-      }
+      const res = await fetch(`${TMDB_BASE}/search/movie?api_key=${TMDB_KEY}&language=ru&query=${encodeURIComponent(query)}`);
+      if (!res.ok) throw new Error('Search failed');
+      const data = await res.json();
+      renderMoviesToGrid(data.results || [], document.getElementById('homeMoviesGrid'));
     } catch (err) {
-      showError(grid, 'Ошибка сети');
-    } finally {
-      loader.style.display = 'none';
+      showError(document.getElementById('homeMoviesGrid'), 'Ошибка поиска');
     }
   }
 
-  // Погодный слайдер
+  // ---------- ПОГОДА (сервер) ----------
   async function loadWeatherSlider() {
     const slider = document.getElementById('weatherSlider');
     slider.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
@@ -186,7 +157,45 @@
     }
   }
 
-  // Создание карточки фильма
+  // ---------- ИЗБРАННОЕ (сервер) ----------
+  async function loadFavorites() {
+    const grid = document.getElementById('favMoviesGrid');
+    const loader = document.getElementById('favLoading');
+    loader.style.display = 'block';
+    grid.innerHTML = '';
+    try {
+      const idsRes = await fetch(`${API_BASE}/favorites`, {
+        headers: { 'Authorization': `Bearer ${currentUser.token}` }
+      });
+      if (!idsRes.ok) throw new Error('Failed to load favorites');
+      const ids = await idsRes.json();
+      if (!ids.length) {
+        grid.innerHTML = '<div class="empty-state">Избранное пусто</div>';
+        return;
+      }
+      const movies = [];
+      for (const id of ids) {
+        const movieRes = await fetch(`${TMDB_BASE}/movie/${id}?api_key=${TMDB_KEY}&language=ru`);
+        if (movieRes.ok) {
+          const data = await movieRes.json();
+          if (data) movies.push(data);
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (movies.length) {
+        grid.innerHTML = '';
+        movies.forEach(movie => grid.appendChild(createMovieCard(movie)));
+      } else {
+        grid.innerHTML = '<div class="empty-state">Не удалось загрузить избранное</div>';
+      }
+    } catch (err) {
+      showError(grid, 'Ошибка сети');
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  // ---------- КАРТОЧКА ФИЛЬМА ----------
   function createMovieCard(movie, isSlider = false) {
     const card = document.createElement('div');
     card.className = 'movie-card' + (isSlider ? ' slider-card' : '');
@@ -223,7 +232,7 @@
 
   function isFavorite(movieId) { return favorites.includes(movieId); }
 
-  // Toggle избранного через API
+  // ---------- TOGGLE ИЗБРАННОГО (сервер) ----------
   async function toggleFavorite(movieId) {
     if (!currentUser) { alert('Войдите, чтобы добавлять в избранное'); return; }
     const isFav = isFavorite(movieId);
@@ -258,7 +267,7 @@
     });
   }
 
-  // Модальное окно с деталями фильма
+  // ---------- ДЕТАЛИ ФИЛЬМА (прямой запрос к TMDB) ----------
   async function openMovieDetails(movieId) {
     const modal = document.getElementById('movieModal');
     const title = document.getElementById('movieTitle');
@@ -267,10 +276,13 @@
     title.textContent = 'Загрузка...';
     details.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
     try {
-      const res = await fetch(`${API_BASE}/movies/${movieId}`);
-      const data = await res.json();
-      const movie = data.movie;
-      const trailer = data.trailer;
+      const [movieRes, videosRes] = await Promise.all([
+        fetch(`${TMDB_BASE}/movie/${movieId}?api_key=${TMDB_KEY}&language=ru`),
+        fetch(`${TMDB_BASE}/movie/${movieId}/videos?api_key=${TMDB_KEY}`)
+      ]);
+      const movie = await movieRes.json();
+      const videos = await videosRes.json();
+      const trailer = videos.results?.find(v => v.type === 'Trailer' && v.site === 'YouTube');
       const trailerEmbed = trailer
         ? `<iframe width="100%" height="315" src="https://www.youtube.com/embed/${trailer.key}" frameborder="0" allowfullscreen style="border-radius:16px; margin-top:15px;"></iframe>`
         : '<p>Трейлер не найден</p>';
@@ -297,6 +309,7 @@
     document.getElementById('movieTitle').textContent = '';
   }
 
+  // ---------- НАВИГАЦИЯ ----------
   function showView(viewId) {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.getElementById(viewId).classList.add('active');
@@ -305,21 +318,7 @@
     else if (viewId === 'viewFavorites') loadFavorites();
   }
 
-  // Поиск
-  async function searchMovies(query) {
-    showView('viewHome');
-    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
-    document.getElementById('homePagination').innerHTML = '';
-    try {
-      const res = await fetch(`${API_BASE}/movies/search?query=${encodeURIComponent(query)}`);
-      const data = await res.json();
-      renderMoviesToGrid(data.results || [], document.getElementById('homeMoviesGrid'));
-    } catch (err) {
-      showError(document.getElementById('homeMoviesGrid'), 'Ошибка поиска');
-    }
-  }
-
-  // Авторизация
+  // ---------- АВТОРИЗАЦИЯ (сервер) ----------
   function openAuthModal(mode) {
     document.getElementById('authModalTitle').textContent = mode === 'login' ? 'Вход' : 'Регистрация';
     document.getElementById('authSubmitBtn').textContent = mode === 'login' ? 'Войти' : 'Зарегистрироваться';
@@ -373,11 +372,11 @@
     if (modal === document.getElementById('authModal')) document.getElementById('authForm').reset();
   }
 
-  // Инициализация
+  // ---------- ИНИЦИАЛИЗАЦИЯ ----------
   async function init() {
     updateAuthUI();
-    if (currentUser) await onUserChanged(); // загрузит избранное и обновит вид
-    else await loadFavoritesFromServer(); // гостевой режим
+    if (currentUser) await onUserChanged();
+    else await loadFavoritesFromServer();
     loadWeatherSlider();
     loadHomeCategory('popular');
     setupEventListeners();
@@ -402,7 +401,7 @@
     document.getElementById('goMoodBtn').addEventListener('click', () => showView('viewMood'));
     document.getElementById('backFromMood').addEventListener('click', () => showView('viewHome'));
     document.getElementById('backFromFav').addEventListener('click', () => showView('viewHome'));
-    // Кнопки настроения
+    // Настроения
     document.querySelectorAll('#moodButtons .mood-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('#moodButtons .mood-btn').forEach(b => b.classList.remove('active'));
