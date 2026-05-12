@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎬 MoodMovie – Кино по настроению</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <a class="logo" id="logoLink">🎥 MoodMovie</a>
+      <div class="search-box">
+        <input type="text" id="searchInput" placeholder="Поиск фильма...">
+        <button id="searchBtn"><i class="fas fa-search"></i></button>
+      </div>
+      <div class="auth-btns" id="authArea"></div>
+    </header>
+
+    <div id="viewHome" class="view active">
+      <div class="categories">
+        <button class="category-btn active" data-cat="popular"><i class="fas fa-fire"></i> Популярное</button>
+        <button class="category-btn" data-cat="now_playing"><i class="fas fa-calendar-alt"></i> Новинки</button>
+        <button class="category-btn redirect" id="goMoodBtn"><i class="fas fa-smile"></i> По настроению</button>
+      </div>
+      <div class="weather-slider-section" id="weatherSection">
+        <div class="weather-slider-title"><i class="fas fa-cloud-sun"></i> Рекомендации по погоде</div>
+        <div class="movie-scroll" id="weatherSlider"></div>
+      </div>
+      <div class="movies-grid" id="homeMoviesGrid"></div>
+      <div id="homeLoading" class="loader" style="display:none;"><div class="spinner"></div></div>
+      <div class="pagination" id="homePagination"></div>
+    </div>
+
+    <div id="viewMood" class="view">
+      <button class="btn back-btn" id="backFromMood"><i class="fas fa-arrow-left"></i> На главную</button>
+      <h2 style="margin-bottom:20px;">🎭 Выберите настроение</h2>
+      <div class="mood-buttons" id="moodButtons">
+        <button class="mood-btn" data-mood="comedy"><span>😄</span> Весёлое</button>
+        <button class="mood-btn" data-mood="drama"><span>😢</span> Грустное</button>
+        <button class="mood-btn" data-mood="romance"><span>💕</span> Романтика</button>
+        <button class="mood-btn" data-mood="mystery"><span>🕵️</span> Детектив</button>
+        <button class="mood-btn" data-mood="action"><span>⚡️</span> Экшн</button>
+        <button class="mood-btn" data-mood="horror"><span>👻</span> Ужасы</button>
+        <button class="mood-btn" data-mood="scifi"><span>🚀</span> Фантастика</button>
+      </div>
+      <div class="movies-grid" id="moodMoviesGrid"></div>
+      <div id="moodLoading" class="loader" style="display:none;"><div class="spinner"></div></div>
+      <div class="pagination" id="moodPagination"></div>
+    </div>
+
+    <div id="viewFavorites" class="view">
+      <button class="btn back-btn" id="backFromFav"><i class="fas fa-arrow-left"></i> На главную</button>
+      <h2 style="margin-bottom:20px;">❤️ Избранное</h2>
+      <div class="movies-grid" id="favMoviesGrid"></div>
+      <div id="favLoading" class="loader" style="display:none;"><div class="spinner"></div></div>
+    </div>
+  </div>
+
+  <!-- Модальное окно фильма -->
+  <div class="modal" id="movieModal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2 id="movieTitle"></h2>
+        <button class="close-btn" id="closeMovieModal">&times;</button>
+      </div>
+      <div id="movieDetails"></div>
+    </div>
+  </div>
+
+  <!-- Модальное окно авторизации -->
+  <div class="modal" id="authModal">
+    <div class="modal-content" style="max-width:400px;">
+      <div class="modal-header">
+        <h2 id="authModalTitle">Вход</h2>
+        <button class="close-btn" id="closeAuthModal">&times;</button>
+      </div>
+      <form id="authForm">
+        <input type="text" id="authUsername" placeholder="Логин" required>
+        <input type="password" id="authPassword" placeholder="Пароль" required>
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button type="submit" class="btn btn-primary btn-block" id="authSubmitBtn">Войти</button>
+          <button type="button" class="btn btn-block" id="switchAuthModeBtn">Регистрация</button>
+        </div>
+        <p class="error-text" id="authError"></p>
+      </form>
+    </div>
+  </div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

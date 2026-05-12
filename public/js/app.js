@@ -1,0 +1,439 @@
+(function() {
+  const API_BASE = '/api'; // если сервер раздаёт статику, можно относительный путь
+  const IMG_BASE = 'https://image.tmdb.org/t/p/w500';
+  const moodGenres = { comedy: '35', drama: '18', romance: '10749', mystery: '9648', action: '28', horror: '27', scifi: '878' };
+
+  let currentUser = JSON.parse(localStorage.getItem('moodmovie_user')) || null; // { username, token }
+  let favorites = []; // список movieId, загружаемый с сервера
+  let currentPage = { home: 1, mood: 1 };
+  let totalPages = { home: 1, mood: 1 };
+  let state = { homeCategory: 'popular', mood: 'comedy' };
+
+  // Загрузка избранного с сервера при старте или смене пользователя
+  async function loadFavoritesFromServer() {
+    if (!currentUser) {
+      favorites = [];
+      return;
+    }
+    try {
+      const res = await fetch(`${API_BASE}/favorites`, {
+        headers: { 'Authorization': `Bearer ${currentUser.token}` }
+      });
+      if (res.ok) favorites = await res.json();
+      else favorites = [];
+    } catch (e) {
+      favorites = [];
+    }
+  }
+
+  // После успешной авторизации или выхода обновляем UI и данные
+  async function onUserChanged() {
+    await loadFavoritesFromServer();
+    refreshCurrentView();
+  }
+
+  function refreshCurrentView() {
+    const activeView = document.querySelector('.view.active');
+    if (!activeView) return;
+    if (activeView.id === 'viewHome') loadHomeCategory(state.homeCategory, currentPage.home);
+    else if (activeView.id === 'viewMood') loadMoodMovies(state.mood, currentPage.mood);
+    else if (activeView.id === 'viewFavorites') loadFavorites();
+  }
+
+  function updateAuthUI() {
+    const authArea = document.getElementById('authArea');
+    if (currentUser) {
+      authArea.innerHTML = `
+        <div class="user-menu">
+          <span>👤 ${currentUser.username}</span>
+          <button class="btn" id="favPageBtn"><i class="fas fa-heart"></i> Избранное</button>
+          <button class="btn" id="logoutBtn">Выйти</button>
+        </div>`;
+      document.getElementById('logoutBtn').addEventListener('click', logout);
+      document.getElementById('favPageBtn').addEventListener('click', () => showView('viewFavorites'));
+    } else {
+      authArea.innerHTML = `
+        <button class="btn" id="loginBtn">Войти</button>
+        <button class="btn btn-primary" id="registerBtn">Регистрация</button>`;
+      document.getElementById('loginBtn').addEventListener('click', () => openAuthModal('login'));
+      document.getElementById('registerBtn').addEventListener('click', () => openAuthModal('register'));
+    }
+  }
+
+  function renderPagination(containerId, page, totalPages, onPageChange) {
+    const container = document.getElementById(containerId);
+    if (totalPages <= 1) { container.innerHTML = ''; return; }
+    container.innerHTML = `
+      <button class="btn" ${page <= 1 ? 'disabled' : ''} data-action="prev">← Назад</button>
+      <span style="display:flex; align-items:center;">${page} / ${totalPages}</span>
+      <button class="btn" ${page >= totalPages ? 'disabled' : ''} data-action="next">Вперёд →</button>`;
+    container.querySelector('[data-action="prev"]')?.addEventListener('click', () => onPageChange(page - 1));
+    container.querySelector('[data-action="next"]')?.addEventListener('click', () => onPageChange(page + 1));
+  }
+
+  function showError(grid, message) {
+    grid.innerHTML = `<div class="empty-state">❌ ${message}</div>`;
+  }
+
+  // Загрузка категорий (popular / now_playing)
+  async function loadHomeCategory(category, page = 1) {
+    const grid = document.getElementById('homeMoviesGrid');
+    const loader = document.getElementById('homeLoading');
+    loader.style.display = 'block';
+    grid.innerHTML = '';
+    try {
+      const endpoint = category === 'popular' ? 'popular' : 'now_playing';
+      const res = await fetch(`${API_BASE}/movies/${endpoint}?page=${page}`, {
+        headers: currentUser ? { 'Authorization': `Bearer ${currentUser.token}` } : {}
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.results) throw new Error('Empty response');
+      renderMoviesToGrid(data.results, grid);
+      currentPage.home = page;
+      totalPages.home = data.total_pages || 1;
+      state.homeCategory = category;
+      renderPagination('homePagination', page, totalPages.home, (p) => loadHomeCategory(category, p));
+    } catch (err) {
+      showError(grid, err.message);
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  // Фильмы по настроению
+  async function loadMoodMovies(mood, page = 1) {
+    const grid = document.getElementById('moodMoviesGrid');
+    const loader = document.getElementById('moodLoading');
+    loader.style.display = 'block';
+    grid.innerHTML = '';
+    try {
+      const res = await fetch(`${API_BASE}/movies/mood?mood=${mood}&page=${page}`, {
+        headers: currentUser ? { 'Authorization': `Bearer ${currentUser.token}` } : {}
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.results) throw new Error('Empty response');
+      renderMoviesToGrid(data.results, grid);
+      currentPage.mood = page;
+      totalPages.mood = data.total_pages || 1;
+      state.mood = mood;
+      renderPagination('moodPagination', page, totalPages.mood, (p) => loadMoodMovies(mood, p));
+    } catch (err) {
+      showError(grid, err.message);
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  // Загрузка избранного (полные данные через TMDB на сервере можно было бы, но ради простоты фронт запрашивает id, а потом детали)
+  async function loadFavorites() {
+    const grid = document.getElementById('favMoviesGrid');
+    const loader = document.getElementById('favLoading');
+    loader.style.display = 'block';
+    grid.innerHTML = '';
+    try {
+      const idsRes = await fetch(`${API_BASE}/favorites`, {
+        headers: { 'Authorization': `Bearer ${currentUser.token}` }
+      });
+      if (!idsRes.ok) throw new Error('Failed to load favorites');
+      const ids = await idsRes.json();
+      if (!ids.length) {
+        grid.innerHTML = '<div class="empty-state">Избранное пусто</div>';
+        return;
+      }
+      // Загружаем каждый фильм отдельно (можно оптимизировать, но пока так)
+      const movies = [];
+      for (const id of ids) {
+        const movieRes = await fetch(`${API_BASE}/movies/${id}`);
+        if (movieRes.ok) {
+          const data = await movieRes.json();
+          if (data.movie) movies.push(data.movie);
+        }
+        await new Promise(r => setTimeout(r, 200));
+      }
+      if (movies.length) {
+        grid.innerHTML = '';
+        movies.forEach(movie => grid.appendChild(createMovieCard(movie)));
+      } else {
+        grid.innerHTML = '<div class="empty-state">Не удалось загрузить избранное</div>';
+      }
+    } catch (err) {
+      showError(grid, 'Ошибка сети');
+    } finally {
+      loader.style.display = 'none';
+    }
+  }
+
+  // Погодный слайдер
+  async function loadWeatherSlider() {
+    const slider = document.getElementById('weatherSlider');
+    slider.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+    try {
+      const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 5000 }));
+      const { latitude, longitude } = pos.coords;
+      const res = await fetch(`${API_BASE}/weather/recommendations?lat=${latitude}&lon=${longitude}`);
+      if (!res.ok) throw new Error('Weather fail');
+      const movies = await res.json();
+      if (movies.length) {
+        slider.innerHTML = '';
+        movies.forEach(movie => slider.appendChild(createMovieCard(movie, true)));
+      } else {
+        slider.innerHTML = '<div class="empty-state">Нет данных о погоде</div>';
+      }
+    } catch (err) {
+      slider.innerHTML = '<div class="empty-state">Не удалось загрузить погодные рекомендации</div>';
+    }
+  }
+
+  // Создание карточки фильма
+  function createMovieCard(movie, isSlider = false) {
+    const card = document.createElement('div');
+    card.className = 'movie-card' + (isSlider ? ' slider-card' : '');
+    card.dataset.id = movie.id;
+    const poster = movie.poster_path ? IMG_BASE + movie.poster_path : 'https://via.placeholder.com/300x450/1e293b/94a3b8?text=Нет+постера';
+    const year = movie.release_date ? movie.release_date.slice(0,4) : '—';
+    const favClass = isFavorite(movie.id) ? 'active' : '';
+    card.innerHTML = `
+      <img class="movie-poster" src="${poster}" alt="${movie.title}" loading="lazy">
+      <button class="fav-icon ${favClass}" data-movieid="${movie.id}"><i class="fas fa-heart"></i></button>
+      <div class="movie-info">
+        <div class="movie-title">${movie.title}</div>
+        <div class="movie-year">${year}</div>
+      </div>`;
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.fav-icon')) return;
+      openMovieDetails(movie.id);
+    });
+    card.querySelector('.fav-icon').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleFavorite(movie.id);
+    });
+    return card;
+  }
+
+  function renderMoviesToGrid(movies, grid) {
+    grid.innerHTML = '';
+    if (!movies.length) {
+      grid.innerHTML = '<div class="empty-state">Фильмы не найдены</div>';
+      return;
+    }
+    movies.forEach(movie => grid.appendChild(createMovieCard(movie)));
+  }
+
+  function isFavorite(movieId) { return favorites.includes(movieId); }
+
+  // Toggle избранного через API
+  async function toggleFavorite(movieId) {
+    if (!currentUser) { alert('Войдите, чтобы добавлять в избранное'); return; }
+    const isFav = isFavorite(movieId);
+    try {
+      if (isFav) {
+        await fetch(`${API_BASE}/favorites/${movieId}`, {
+          method: 'DELETE',
+          headers: { 'Authorization': `Bearer ${currentUser.token}` }
+        });
+        favorites = favorites.filter(id => id !== movieId);
+      } else {
+        await fetch(`${API_BASE}/favorites`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${currentUser.token}`
+          },
+          body: JSON.stringify({ movieId })
+        });
+        favorites.push(movieId);
+      }
+      updateAllFavoriteIcons();
+    } catch (err) {
+      alert('Ошибка при обновлении избранного');
+    }
+  }
+
+  function updateAllFavoriteIcons() {
+    document.querySelectorAll('.fav-icon').forEach(btn => {
+      const movieId = parseInt(btn.dataset.movieid);
+      btn.classList.toggle('active', isFavorite(movieId));
+    });
+  }
+
+  // Модальное окно с деталями фильма
+  async function openMovieDetails(movieId) {
+    const modal = document.getElementById('movieModal');
+    const title = document.getElementById('movieTitle');
+    const details = document.getElementById('movieDetails');
+    modal.classList.add('active');
+    title.textContent = 'Загрузка...';
+    details.innerHTML = '<div class="loader"><div class="spinner"></div></div>';
+    try {
+      const res = await fetch(`${API_BASE}/movies/${movieId}`);
+      const data = await res.json();
+      const movie = data.movie;
+      const trailer = data.trailer;
+      const trailerEmbed = trailer
+        ? `<iframe width="100%" height="315" src="https://www.youtube.com/embed/${trailer.key}" frameborder="0" allowfullscreen style="border-radius:16px; margin-top:15px;"></iframe>`
+        : '<p>Трейлер не найден</p>';
+      title.textContent = movie.title;
+      details.innerHTML = `
+        <div style="display:flex; gap:20px; flex-wrap:wrap;">
+          <img src="${movie.poster_path ? IMG_BASE + movie.poster_path : 'https://via.placeholder.com/300x450'}" style="width:200px; border-radius:16px;">
+          <div style="flex:1;">
+            <p><strong>Год:</strong> ${movie.release_date?.slice(0,4) || '—'}</p>
+            <p><strong>Рейтинг:</strong> ⭐ ${movie.vote_average?.toFixed(1) || '—'}</p>
+            <p><strong>Жанры:</strong> ${movie.genres?.map(g => g.name).join(', ') || '—'}</p>
+            <p>${movie.overview || 'Описание отсутствует'}</p>
+          </div>
+        </div>
+        ${trailerEmbed}`;
+    } catch (err) {
+      details.innerHTML = '<p>Ошибка загрузки</p>';
+    }
+  }
+
+  function closeMovieModal() {
+    document.getElementById('movieModal').classList.remove('active');
+    document.getElementById('movieDetails').innerHTML = '';
+    document.getElementById('movieTitle').textContent = '';
+  }
+
+  function showView(viewId) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.getElementById(viewId).classList.add('active');
+    if (viewId === 'viewHome') loadHomeCategory(state.homeCategory, currentPage.home);
+    else if (viewId === 'viewMood') loadMoodMovies(state.mood, currentPage.mood);
+    else if (viewId === 'viewFavorites') loadFavorites();
+  }
+
+  // Поиск
+  async function searchMovies(query) {
+    showView('viewHome');
+    document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('homePagination').innerHTML = '';
+    try {
+      const res = await fetch(`${API_BASE}/movies/search?query=${encodeURIComponent(query)}`);
+      const data = await res.json();
+      renderMoviesToGrid(data.results || [], document.getElementById('homeMoviesGrid'));
+    } catch (err) {
+      showError(document.getElementById('homeMoviesGrid'), 'Ошибка поиска');
+    }
+  }
+
+  // Авторизация
+  function openAuthModal(mode) {
+    document.getElementById('authModalTitle').textContent = mode === 'login' ? 'Вход' : 'Регистрация';
+    document.getElementById('authSubmitBtn').textContent = mode === 'login' ? 'Войти' : 'Зарегистрироваться';
+    document.getElementById('switchAuthModeBtn').textContent = mode === 'login' ? 'Регистрация' : 'Вход';
+    document.getElementById('authForm').dataset.mode = mode;
+    document.getElementById('authError').style.display = 'none';
+    document.getElementById('authModal').classList.add('active');
+  }
+
+  async function handleAuthSubmit(e) {
+    e.preventDefault();
+    const username = document.getElementById('authUsername').value.trim();
+    const password = document.getElementById('authPassword').value;
+    const mode = document.getElementById('authForm').dataset.mode;
+    const errorEl = document.getElementById('authError');
+    if (!username || !password) {
+      errorEl.textContent = 'Заполните все поля';
+      errorEl.style.display = 'block';
+      return;
+    }
+    try {
+      const endpoint = mode === 'register' ? 'register' : 'login';
+      const res = await fetch(`${API_BASE}/auth/${endpoint}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Ошибка авторизации');
+      currentUser = { username: data.username, token: data.token };
+      localStorage.setItem('moodmovie_user', JSON.stringify(currentUser));
+      await onUserChanged();
+      updateAuthUI();
+      closeModal(document.getElementById('authModal'));
+    } catch (err) {
+      errorEl.textContent = err.message;
+      errorEl.style.display = 'block';
+    }
+  }
+
+  function logout() {
+    localStorage.removeItem('moodmovie_user');
+    currentUser = null;
+    onUserChanged();
+    updateAuthUI();
+    showView('viewHome');
+  }
+
+  function closeModal(modal) {
+    modal.classList.remove('active');
+    if (modal === document.getElementById('authModal')) document.getElementById('authForm').reset();
+  }
+
+  // Инициализация
+  async function init() {
+    updateAuthUI();
+    if (currentUser) await onUserChanged(); // загрузит избранное и обновит вид
+    else await loadFavoritesFromServer(); // гостевой режим
+    loadWeatherSlider();
+    loadHomeCategory('popular');
+    setupEventListeners();
+  }
+
+  function setupEventListeners() {
+    document.getElementById('logoLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      showView('viewHome');
+    });
+    // Категории home
+    document.querySelector('[data-cat="popular"]').addEventListener('click', () => {
+      document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector('[data-cat="popular"]').classList.add('active');
+      loadHomeCategory('popular');
+    });
+    document.querySelector('[data-cat="now_playing"]').addEventListener('click', () => {
+      document.querySelectorAll('.category-btn').forEach(b => b.classList.remove('active'));
+      document.querySelector('[data-cat="now_playing"]').classList.add('active');
+      loadHomeCategory('now_playing');
+    });
+    document.getElementById('goMoodBtn').addEventListener('click', () => showView('viewMood'));
+    document.getElementById('backFromMood').addEventListener('click', () => showView('viewHome'));
+    document.getElementById('backFromFav').addEventListener('click', () => showView('viewHome'));
+    // Кнопки настроения
+    document.querySelectorAll('#moodButtons .mood-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('#moodButtons .mood-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        loadMoodMovies(btn.dataset.mood);
+      });
+    });
+    // Поиск
+    document.getElementById('searchBtn').addEventListener('click', () => {
+      const q = document.getElementById('searchInput').value.trim();
+      if (q) searchMovies(q);
+    });
+    document.getElementById('searchInput').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        const q = document.getElementById('searchInput').value.trim();
+        if (q) searchMovies(q);
+      }
+    });
+    // Модальные окна
+    document.getElementById('closeMovieModal').addEventListener('click', closeMovieModal);
+    document.getElementById('closeAuthModal').addEventListener('click', () => closeModal(document.getElementById('authModal')));
+    document.getElementById('switchAuthModeBtn').addEventListener('click', () => {
+      const mode = document.getElementById('authForm').dataset.mode === 'login' ? 'register' : 'login';
+      openAuthModal(mode);
+    });
+    document.getElementById('authForm').addEventListener('submit', handleAuthSubmit);
+    window.addEventListener('click', (e) => {
+      if (e.target === document.getElementById('movieModal')) closeMovieModal();
+      if (e.target === document.getElementById('authModal')) closeModal(document.getElementById('authModal'));
+    });
+  }
+
+  init();
+})();
